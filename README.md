@@ -12,23 +12,6 @@ Proje, aşağıdaki özellikleri içeren bir veri seti kullanmaktadır:
 - HumidityRatio (Nem Oranı)
 - Occupancy (Doluluk - Hedef değişken)
 
-## Kurulum
-
-1. Gerekli kütüphaneleri yükleyin:
-```bash
-pip install -r requirements.txt
-```
-
-2. Veri setini `data` klasörüne yerleştirin:
-- `data/datatraining.txt`
-
-## Çalıştırma
-
-Projeyi çalıştırmak için:
-```bash
-python occupancy_prediction.py
-```
-
 ## Özellikler
 
 1. Klasik Makine Öğrenmesi Modelleri:
