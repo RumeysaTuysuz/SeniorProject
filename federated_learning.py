@@ -38,6 +38,39 @@ def plot_confusion_matrix(cm, classes, title, filename):
     plt.savefig(filename)
     plt.close()
 
+# --- Helper Function to Print Table Sections ---
+def print_table_section(title: str, headers: List[str], data_rows: List[List[str]], logger_instance):
+    logger_instance.info(f"\n{title}")
+    if not data_rows:
+        logger_instance.info("  (Bu bölüm için veri yok)")
+        return
+
+    col_widths = [len(header) for header in headers]
+    for row_data in data_rows:
+        for i, cell in enumerate(row_data):
+            col_widths[i] = max(col_widths[i], len(str(cell)))
+
+    # Create separator line
+    separator_parts = ["-" * width for width in col_widths]
+    separator = "-+-".join(separator_parts)
+    if not col_widths: # Prevent error if col_widths is empty
+        separator = ""
+
+    # Print header row
+    header_line_parts = [f"{headers[i]:<{col_widths[i]}}" for i in range(len(headers))]
+    logger_instance.info(" | ".join(header_line_parts))
+    if separator: # Only print separator if it's meaningful
+        logger_instance.info(separator)
+
+    # Print data rows
+    for row_data in data_rows:
+        row_line_parts = [f"{str(row_data[i]):<{col_widths[i]}}" for i in range(len(row_data))]
+        logger_instance.info(" | ".join(row_line_parts))
+    
+    if separator: # Add bottom line only if separator is meaningful
+        # Adjust length for " | " separators between columns
+        logger_instance.info("-" * (sum(col_widths) + (len(col_widths) -1) * 3 if col_widths else 0) )
+
 # --- Data Loading and Preprocessing ---
 def load_all_data(train_path='data/datatraining.txt', test1_path='data/datatest.txt', test2_path='data/datatest2.txt'):
     """Load, process, and scale separate training and two separate test files."""
@@ -119,7 +152,6 @@ def train_classical_models(X_train, y_train, X_test1, y_test1, X_test2, y_test2)
         }
         logger.info(f"{name} - Test Set 1 Accuracy: {acc_test1:.4f}")
         logger.info(f"{name} - Test Set 2 Accuracy: {acc_test2:.4f}")
-        logger.info(f"{name} - Training Time: {training_time:.2f} seconds")
     
     logger.info("--- Classical Models Training Completed ---")
     return results
@@ -143,14 +175,15 @@ class OccupancyNN(nn.Module):
 
 # Client class for federated learning
 class OccupancyClient(fl.client.NumPyClient):
-    def __init__(self, model, train_loader, val_loader_test1, device):
+    def __init__(self, model, train_loader, val_loader_test1, device, pos_weight_tensor=None):
         self.model = model
         self.train_loader = train_loader
         self.val_loader_test1 = val_loader_test1 # For Test Set 1
         self.device = device
-        self.optimizer = optim.Adam(self.model.parameters(), lr=0.05)
-        self.criterion = nn.BCELoss()
-        # Add a client-specific identifier (optional, for logging)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001) # Adjusted learning rate
+        self.criterion = nn.BCELoss() # Instantiate first
+        if pos_weight_tensor is not None:
+            self.criterion.pos_weight = pos_weight_tensor # Set pos_weight as an attribute
         self.client_id_str = "UnknownClient"
         if self.train_loader and self.train_loader.dataset:
             self.client_id_str = f"datasize_{len(self.train_loader.dataset)}"
@@ -244,10 +277,11 @@ class OccupancyClient(fl.client.NumPyClient):
 
 # FedProx Client class for federated learning
 class FedProxClient(OccupancyClient): # Inherits from OccupancyClient
-    def __init__(self, model, train_loader, val_loader_test1, device, mu=0.01):
-        super().__init__(model, train_loader, val_loader_test1, device)
+    def __init__(self, model, train_loader, val_loader_test1, device, mu=0.1, pos_weight_tensor=None):
+        super().__init__(model, train_loader, val_loader_test1, device, pos_weight_tensor) # Pass pos_weight_tensor to parent
         self.mu = mu
-        self.global_params = None
+        # Optimizer and criterion are set in parent, but we override optimizer for FedProx
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.0005) # Different LR for FedProx
         if self.train_loader and self.train_loader.dataset: # update client_id_str
             self.client_id_str = f"FedProx_datasize_{len(self.train_loader.dataset)}"
 
@@ -326,6 +360,13 @@ def main():
     input_size = X_train_scaled.shape[1]
     class_names_fl = ['Not Occupied', 'Occupied'] # Class names for FL CM
 
+    # Calculate pos_weight for BCELoss to handle class imbalance
+    num_positives = np.sum(y_train)
+    num_negatives = len(y_train) - num_positives
+    pos_weight_value = num_negatives / num_positives if num_positives > 0 else 1.0 # Avoid division by zero
+    pos_weight_tensor = torch.tensor([pos_weight_value], device=device)
+    logger.info(f"Calculated pos_weight for BCELoss: {pos_weight_value:.4f}")
+
     # Create initial parameters once (same for all FL simulations)
     initial_model_for_fl = OccupancyNN(input_size).to(device)
     initial_params_ndarrays = [val.cpu().numpy() for _, val in initial_model_for_fl.state_dict().items()]
@@ -334,7 +375,7 @@ def main():
     client_counts_to_test = [2, 3, 5] 
     all_fl_results_by_client_count = {}
     # Update fit_config to include number of epochs
-    num_local_epochs = 1 # Control local epoch count here
+    num_local_epochs = 5 # Adjusted local epoch count
 
     for n_c in client_counts_to_test:
         logger.info(f"\n--- Starting Federated Learning Simulation: {n_c} Clients ---")
@@ -349,7 +390,7 @@ def main():
             train_loader = DataLoader(TensorDataset(torch.FloatTensor(X_train_client), torch.FloatTensor(y_train_client).reshape(-1, 1)), batch_size=32, shuffle=True)
             val_loader_test1 = DataLoader(TensorDataset(torch.FloatTensor(X_test1_scaled), torch.FloatTensor(y_test1).reshape(-1, 1)), batch_size=32)
             model = OccupancyNN(input_size).to(device)
-            return OccupancyClient(model, train_loader, val_loader_test1, device)
+            return OccupancyClient(model, train_loader, val_loader_test1, device, pos_weight_tensor=pos_weight_tensor)
 
         def current_client_fn_fedprox(cid: str) -> fl.client.Client:
             client_id = int(cid)
@@ -358,7 +399,7 @@ def main():
             train_loader = DataLoader(TensorDataset(torch.FloatTensor(X_train_client), torch.FloatTensor(y_train_client).reshape(-1, 1)), batch_size=32, shuffle=True)
             val_loader_test1 = DataLoader(TensorDataset(torch.FloatTensor(X_test1_scaled), torch.FloatTensor(y_test1).reshape(-1, 1)), batch_size=32)
             model = OccupancyNN(input_size).to(device)
-            return FedProxClient(model, train_loader, val_loader_test1, device, mu=0.01)
+            return FedProxClient(model, train_loader, val_loader_test1, device, mu=0.1, pos_weight_tensor=pos_weight_tensor)
 
         current_strategies_to_run = {
             "FedAvg": (current_client_fn_fedavg, fl.server.strategy.FedAvg),
@@ -369,6 +410,8 @@ def main():
         for name, (client_fn_for_strategy, server_strategy_class) in current_strategies_to_run.items():
             logger.info(f"\n--- Running {name} Simulation with {current_num_clients} clients ---")
             
+            fl_start_time = time.time() # Record start time for FL strategy
+
             # Recreate evaluate_fn and get_last_params_fn for each strategy
             temp_model_for_eval_fn = OccupancyNN(input_size)
             evaluate_fn_test2, get_last_params_fn = get_evaluate_fn_test2_and_param_capture(
@@ -389,14 +432,25 @@ def main():
                 evaluate_metrics_aggregation_fn=aggregate_client_metrics_test1,
                 initial_parameters=fl_initial_parameters 
             )
+            
+            # Define ray_init_args to set object_store_memory
+            ray_init_args_config = {
+                "object_store_memory": 100 * 1024 * 1024,  # 100 MB
+                "ignore_reinit_error": True # Add this to avoid issues if Ray is already initialized
+            }
+
             history = fl.simulation.start_simulation(
                 client_fn=client_fn_for_strategy,
                 num_clients=current_num_clients,
-                config=fl.server.ServerConfig(num_rounds=3), # Further reduced num_rounds
+                config=fl.server.ServerConfig(num_rounds=10), # Adjusted num_rounds
                 strategy=strategy, 
-                client_resources={"num_cpus": 1, "num_gpus": 0.0} # CPU only for simplicity
+                client_resources={"num_cpus": 1, "num_gpus": 0.0}, # CPU only for simplicity
+                ray_init_args=ray_init_args_config
             )
             
+            fl_end_time = time.time() # Record end time for FL strategy
+            fl_training_time = fl_end_time - fl_start_time # Calculate training time
+
             current_run_fl_results[name] = {}
             if history.metrics_distributed and 'accuracy_test1' in history.metrics_distributed and history.metrics_distributed['accuracy_test1']:
                 current_run_fl_results[name]['Accuracy_Test1'] = history.metrics_distributed['accuracy_test1'][-1][1]
@@ -409,9 +463,11 @@ def main():
             else:
                 current_run_fl_results[name]['Accuracy_Test2'] = 0.0
                 logger.warning(f"Test Set 2 centralized metrics not found or empty for {name} ({current_num_clients} clients).")
+            
+            current_run_fl_results[name]['Training Time'] = fl_training_time # Store training time
             logger.info(f"--- {name} Simulation with {current_num_clients} clients Finished ---")
 
-            # --- Confusion Matrices for FL Model (with updated parameter retrieval) ---
+            # --- Confusion Matrices and Other Metrics for FL Model (with updated parameter retrieval) ---
             final_global_params_for_cm = get_last_params_fn()
             if final_global_params_for_cm:
                 final_global_params_ndarrays = parameters_to_ndarrays(final_global_params_for_cm)
@@ -429,11 +485,16 @@ def main():
                         outputs = final_global_model(batch_x.to(device))
                         predicted_labels = (outputs > 0.5).float().cpu().numpy()
                         y_pred_fl_test1_list.extend(predicted_labels.flatten())
-                cm_fl_test1 = confusion_matrix(y_test1, np.array(y_pred_fl_test1_list))
+                
+                y_pred_fl_test1_array = np.array(y_pred_fl_test1_list)
+                
+                cm_fl_test1 = confusion_matrix(y_test1, y_pred_fl_test1_array)
                 plot_confusion_matrix(cm_fl_test1, classes=class_names_fl,
                                       title=f'{name} ({current_num_clients} clients) - CM (Test Set 1)',
                                       filename=os.path.join('results', f'cm_{name}_{current_num_clients}clients_test1.png'))
-                
+                logger.info(f"{name} ({current_num_clients} clients) - Test Set 1 Final Accuracy (from history): "
+                            f"{current_run_fl_results[name].get('Accuracy_Test1', 0.0):.4f}")
+
                 # CM on Test Set 2
                 y_pred_fl_test2_list = []
                 with torch.no_grad():
@@ -442,12 +503,17 @@ def main():
                         outputs = final_global_model(batch_x.to(device))
                         predicted_labels = (outputs > 0.5).float().cpu().numpy()
                         y_pred_fl_test2_list.extend(predicted_labels.flatten())
-                cm_fl_test2 = confusion_matrix(y_test2, np.array(y_pred_fl_test2_list))
+                
+                y_pred_fl_test2_array = np.array(y_pred_fl_test2_list)
+
+                cm_fl_test2 = confusion_matrix(y_test2, y_pred_fl_test2_array)
                 plot_confusion_matrix(cm_fl_test2, classes=class_names_fl,
                                       title=f'{name} ({current_num_clients} clients) - CM (Test Set 2)',
                                       filename=os.path.join('results', f'cm_{name}_{current_num_clients}clients_test2.png'))
+                logger.info(f"{name} ({current_num_clients} clients) - Test Set 2 Final Accuracy (from history): "
+                            f"{current_run_fl_results[name].get('Accuracy_Test2', 0.0):.4f}")
             else:
-                logger.warning(f"FL CM: Could not capture final parameters - {name} ({current_num_clients} clients).")
+                logger.warning(f"FL CM & Metrics: Could not capture final parameters - {name} ({current_num_clients} clients).")
 
             # --- FL Learning Curves ---
             plt.figure(figsize=(12, 8))
@@ -489,21 +555,34 @@ def main():
     logger.info("\n\n--- COMPARATIVE RESULTS OF ALL MODELS (TABLE) ---")
     
     table_data_for_print = []
-    table_headers = ["Model Name", "Test Set 1 Accuracy", "Test Set 2 Accuracy"]
+    table_headers = [
+        "Model Name", 
+        "Acc (Test1)",
+        "Acc (Test2)",
+        "Training Time (s)" # Updated header
+    ]
     
     # Classical model results
     for name_classical, metrics_classical in classical_results.items():
-        acc1_classical = metrics_classical.get('Accuracy_Test1', 0.0)
-        acc2_classical = metrics_classical.get('Accuracy_Test2', 0.0)
-        table_data_for_print.append([name_classical, f"{acc1_classical:.4f}", f"{acc2_classical:.4f}"])
+        row = [name_classical]
+        row.extend([
+            f"{metrics_classical.get('Accuracy_Test1', 0.0):.4f}",
+            f"{metrics_classical.get('Accuracy_Test2', 0.0):.4f}",
+            f"{metrics_classical.get('Training Time', 0.0):.2f}" # Add training time
+        ])
+        table_data_for_print.append(row)
 
     # FL model results
     for n_c_fl, fl_results_for_count_fl in all_fl_results_by_client_count.items():
         for strategy_name_fl, metrics_fl in fl_results_for_count_fl.items():
-            model_display_name_fl = f"{strategy_name_fl} ({n_c_fl} clients)"
-            acc1_fl = metrics_fl.get('Accuracy_Test1', 0.0)
-            acc2_fl = metrics_fl.get('Accuracy_Test2', 0.0)
-            table_data_for_print.append([model_display_name_fl, f"{acc1_fl:.4f}", f"{acc2_fl:.4f}"])
+            model_display_name_fl = f"{strategy_name_fl} ({n_c_fl} clients)" # Back to English "clients"
+            row = [model_display_name_fl]
+            row.extend([
+                f"{metrics_fl.get('Accuracy_Test1', 0.0):.4f}",
+                f"{metrics_fl.get('Accuracy_Test2', 0.0):.4f}",
+                f"{metrics_fl.get('Training Time', 0.0):.2f}" # Add training time
+            ])
+            table_data_for_print.append(row)
 
     # Calculate column widths
     col_widths = [len(header) for header in table_headers]
