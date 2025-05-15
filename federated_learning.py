@@ -7,6 +7,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import GaussianNB
 from xgboost import XGBClassifier
 from sklearn.linear_model import Perceptron
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 import torch
 import torch.nn as nn
@@ -21,6 +22,7 @@ import warnings
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.svm import SVC
 
 warnings.filterwarnings('ignore')
 
@@ -117,7 +119,9 @@ def train_classical_models(X_train, y_train, X_test1, y_test1, X_test2, y_test2)
         'KNN': KNeighborsClassifier(n_neighbors=20),
         'XGBoost': XGBClassifier(n_estimators=10, max_depth=2, learning_rate=0.3, random_state=42, use_label_encoder=False, eval_metric='logloss'),
         'Naive Bayes': GaussianNB(),
-        'Perceptron': Perceptron(max_iter=50, eta0=0.5, random_state=42)
+        'Perceptron': Perceptron(max_iter=50, eta0=0.5, random_state=42),
+        'SVM': SVC(kernel='rbf', C=1.0, random_state=42, probability=True),
+        'Decision Tree (CART)': DecisionTreeClassifier(random_state=42)
     }
     
     results = {}
