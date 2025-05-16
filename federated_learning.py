@@ -23,6 +23,7 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.svm import SVC
+import fnmatch
 
 warnings.filterwarnings('ignore')
 
@@ -133,29 +134,26 @@ def train_classical_models(X_train, y_train, X_test1, y_test1, X_test2, y_test2)
         model.fit(X_train, y_train)
         training_time = time.time() - start_time
         
-        # Evaluate on Test Set 1
+        # Evaluate on Test Set 1 (datatest.txt - now validation, CM removed)
         y_pred_test1 = model.predict(X_test1)
         acc_test1 = accuracy_score(y_test1, y_pred_test1)
-        cm_test1 = confusion_matrix(y_test1, y_pred_test1)
-        plot_confusion_matrix(cm_test1, classes=class_names,
-                              title=f'{name} - CM (Test Set 1)',
-                              filename=os.path.join('results', f'cm_{name.replace(" ", "_")}_test1.png'))
+        # CM for Test Set 1 removed as per user request
         
-        # Evaluate on Test Set 2
+        # Evaluate on Test Set 2 (datatest2.txt - this is our Test Set)
         y_pred_test2 = model.predict(X_test2)
         acc_test2 = accuracy_score(y_test2, y_pred_test2)
         cm_test2 = confusion_matrix(y_test2, y_pred_test2)
         plot_confusion_matrix(cm_test2, classes=class_names,
-                              title=f'{name} - CM (Test Set 2)',
-                              filename=os.path.join('results', f'cm_{name.replace(" ", "_")}_test2.png'))
+                              title=f'{name} - CM (Test Set - datatest2.txt)', # Back to English
+                              filename=os.path.join('results', f'cm_{name.replace(" ", "_")}_test_set.png')) # General test set naming
         
         results[name] = {
-            'Accuracy_Test1': acc_test1,
-            'Accuracy_Test2': acc_test2,
+            'Accuracy_Validation': acc_test1, # Renamed from Accuracy_Test1
+            'Accuracy_Test': acc_test2,       # Renamed from Accuracy_Test2
             'Training Time': training_time
         }
-        logger.info(f"{name} - Test Set 1 Accuracy: {acc_test1:.4f}")
-        logger.info(f"{name} - Test Set 2 Accuracy: {acc_test2:.4f}")
+        logger.info(f"{name} - Validation Set (datatest.txt) Accuracy: {acc_test1:.4f}") # Updated log message
+        logger.info(f"{name} - Test Set (datatest2.txt) Accuracy: {acc_test2:.4f}")       # Updated log message
     
     logger.info("--- Classical Models Training Completed ---")
     return results
@@ -254,14 +252,15 @@ class OccupancyClient(fl.client.NumPyClient):
             
             if not self.val_loader_test1 or len(self.val_loader_test1.dataset) == 0:
                 logger.warning(f"Client ({client_identifier}) - Round {round_num} - Evaluation data (Test Set 1) empty or DataLoader missing. Skipping evaluate.")
-                return float('inf'), 0, {"accuracy": 0.0, "eval_error": "empty_val_data"}
+                return float('inf'), 0, {"accuracy": 0.0, "loss": float('inf'), "eval_error": "empty_val_data"}
 
             with torch.no_grad():
                 batches_processed = 0
                 for batch_x, batch_y in self.val_loader_test1: # Evaluate on Test Set 1
                     batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
                     output = self.model(batch_x)
-                    loss += self.criterion(output, batch_y).item() * batch_x.size(0)
+                    batch_loss = self.criterion(output, batch_y).item()
+                    loss += batch_loss * batch_x.size(0)
                     predicted = (output > 0.5).float()
                     total += batch_y.size(0)
                     correct += (predicted == batch_y).sum().item()
@@ -269,15 +268,15 @@ class OccupancyClient(fl.client.NumPyClient):
 
             if batches_processed == 0 or total == 0:
                 logger.warning(f"Client ({client_identifier}) - Round {round_num} - No batches processed or total samples zero during evaluation.")
-                return float('inf'), 0, {"accuracy": 0.0, "eval_error": "no_samples_evaluated"}
+                return float('inf'), 0, {"accuracy": 0.0, "loss": float('inf'), "eval_error": "no_samples_evaluated"}
 
             avg_loss = loss / total
             accuracy = correct / total
             logger.info(f"Client ({client_identifier}) - Round {round_num} - Evaluating on Test Set 1: Loss={avg_loss:.4f}, Accuracy={accuracy:.4f}")
-            return avg_loss, len(self.val_loader_test1.dataset), {"accuracy": accuracy}
+            return avg_loss, len(self.val_loader_test1.dataset), {"accuracy": accuracy, "loss": avg_loss}
         except Exception as e:
             logger.error(f"CLIENT EVALUATE ERROR ({client_identifier}) - Round {config.get('round', 0)}: {e}", exc_info=True)
-            return float('inf'), 0, {"accuracy": 0.0, "eval_error": str(e)}
+            return float('inf'), 0, {"accuracy": 0.0, "loss": float('inf'), "eval_error": str(e)}
 
 # FedProx Client class for federated learning
 class FedProxClient(OccupancyClient): # Inherits from OccupancyClient
@@ -352,6 +351,32 @@ def main():
     if not os.path.exists('results'):
         os.makedirs('results')
         logger.info("'results' directory created.")
+    else:
+        logger.info("'results' directory already exists.")
+
+    # Delete old confusion matrix files
+    logger.info("Deleting old confusion matrix files from 'results' directory...")
+    deleted_files_count = 0
+    patterns_to_delete = ["cm_*_test1.png", "cm_*_test2.png", "cm_*_validation.png"]
+    try:
+        for filename in os.listdir("results"):
+            for pattern in patterns_to_delete:
+                if fnmatch.fnmatch(filename, pattern):
+                    try:
+                        filepath = os.path.join("results", filename)
+                        os.remove(filepath)
+                        logger.info(f"  Deleted: {filename}")
+                        deleted_files_count += 1
+                        break # Move to next file in directory once matched and deleted
+                    except OSError as e:
+                        logger.error(f"  Error deleting {filename}: {e}")
+        if deleted_files_count == 0:
+            logger.info("  No old confusion matrix files matching patterns found to delete.")
+        else:
+            logger.info(f"  Successfully deleted {deleted_files_count} old file(s).")
+    except Exception as e:
+        logger.error(f"Error listing or processing files in 'results' directory for deletion: {e}")
+
 
     # --- 1. Data Loading and Preparation --- 
     X_train_scaled, y_train, X_test1_scaled, y_test1, X_test2_scaled, y_test2 = load_all_data()
@@ -376,7 +401,7 @@ def main():
     initial_params_ndarrays = [val.cpu().numpy() for _, val in initial_model_for_fl.state_dict().items()]
     fl_initial_parameters = ndarrays_to_parameters(initial_params_ndarrays)
 
-    client_counts_to_test = [2, 3, 5] 
+    client_counts_to_test = [2, 3, 5, 10] # 10 istemci eklendi
     all_fl_results_by_client_count = {}
     # Update fit_config to include number of epochs
     num_local_epochs = 5 # Adjusted local epoch count
@@ -456,18 +481,33 @@ def main():
             fl_training_time = fl_end_time - fl_start_time # Calculate training time
 
             current_run_fl_results[name] = {}
-            if history.metrics_distributed and 'accuracy_test1' in history.metrics_distributed and history.metrics_distributed['accuracy_test1']:
-                current_run_fl_results[name]['Accuracy_Test1'] = history.metrics_distributed['accuracy_test1'][-1][1]
+            # Use new metric keys for validation (client-side on datatest.txt)
+            if history.metrics_distributed and 'accuracy_validation' in history.metrics_distributed and history.metrics_distributed['accuracy_validation']:
+                current_run_fl_results[name]['Accuracy_Validation'] = history.metrics_distributed['accuracy_validation'][-1][1]
             else:
-                current_run_fl_results[name]['Accuracy_Test1'] = 0.0 
-                logger.warning(f"Test Set 1 distributed metrics not found or empty for {name} ({current_num_clients} clients).")
+                current_run_fl_results[name]['Accuracy_Validation'] = 0.0 
+                logger.warning(f"Validation accuracy (datatest.txt) distributed metrics not found or empty for {name} ({current_num_clients} clients).")
 
-            if history.metrics_centralized and 'accuracy_test2' in history.metrics_centralized and history.metrics_centralized['accuracy_test2']:
-                current_run_fl_results[name]['Accuracy_Test2'] = history.metrics_centralized['accuracy_test2'][-1][1]
+            if history.metrics_distributed and 'loss_validation' in history.metrics_distributed and history.metrics_distributed['loss_validation']:
+                current_run_fl_results[name]['Loss_Validation'] = history.metrics_distributed['loss_validation'][-1][1]
             else:
-                current_run_fl_results[name]['Accuracy_Test2'] = 0.0
-                logger.warning(f"Test Set 2 centralized metrics not found or empty for {name} ({current_num_clients} clients).")
+                current_run_fl_results[name]['Loss_Validation'] = float('inf')
+                logger.warning(f"Validation loss (datatest.txt) distributed metrics not found or empty for {name} ({current_num_clients} clients).")
+
+            # Use new metric key for test (server-side on datatest2.txt)
+            if history.metrics_centralized and 'accuracy_test' in history.metrics_centralized and history.metrics_centralized['accuracy_test']:
+                current_run_fl_results[name]['Accuracy_Test'] = history.metrics_centralized['accuracy_test'][-1][1]
+            else:
+                current_run_fl_results[name]['Accuracy_Test'] = 0.0
+                logger.warning(f"Test accuracy (datatest2.txt) centralized metrics not found or empty for {name} ({current_num_clients} clients).")
             
+            # Test loss is available in history.losses_centralized
+            if history.losses_centralized and history.losses_centralized:
+                 current_run_fl_results[name]['Loss_Test'] = history.losses_centralized[-1][1] # Store last test loss
+            else:
+                current_run_fl_results[name]['Loss_Test'] = float('inf')
+                logger.warning(f"Test loss (datatest2.txt) centralized metrics not found or empty for {name} ({current_num_clients} clients).")
+
             current_run_fl_results[name]['Training Time'] = fl_training_time # Store training time
             logger.info(f"--- {name} Simulation with {current_num_clients} clients Finished ---")
 
@@ -481,25 +521,28 @@ def main():
                 final_global_model.load_state_dict(f_state_dict)
                 final_global_model.eval()
 
-                # CM on Test Set 1
-                y_pred_fl_test1_list = []
-                with torch.no_grad():
-                    test_loader1 = DataLoader(TensorDataset(torch.FloatTensor(X_test1_scaled), torch.FloatTensor(y_test1).reshape(-1,1)), batch_size=32)
-                    for batch_x, _ in test_loader1:
-                        outputs = final_global_model(batch_x.to(device))
-                        predicted_labels = (outputs > 0.5).float().cpu().numpy()
-                        y_pred_fl_test1_list.extend(predicted_labels.flatten())
-                
-                y_pred_fl_test1_array = np.array(y_pred_fl_test1_list)
-                
-                cm_fl_test1 = confusion_matrix(y_test1, y_pred_fl_test1_array)
-                plot_confusion_matrix(cm_fl_test1, classes=class_names_fl,
-                                      title=f'{name} ({current_num_clients} clients) - CM (Test Set 1)',
-                                      filename=os.path.join('results', f'cm_{name}_{current_num_clients}clients_test1.png'))
-                logger.info(f"{name} ({current_num_clients} clients) - Test Set 1 Final Accuracy (from history): "
-                            f"{current_run_fl_results[name].get('Accuracy_Test1', 0.0):.4f}")
+                # CM on Validation Set (datatest.txt) - REMOVED
+                # y_pred_fl_test1_list = []
+                # with torch.no_grad():
+                #     test_loader1 = DataLoader(TensorDataset(torch.FloatTensor(X_test1_scaled), torch.FloatTensor(y_test1).reshape(-1,1)), batch_size=32)
+                #     for batch_x, _ in test_loader1:
+                #         outputs = final_global_model(batch_x.to(device))
+                #         predicted_labels = (outputs > 0.5).float().cpu().numpy()
+                #         y_pred_fl_test1_list.extend(predicted_labels.flatten())
+                # 
+                # y_pred_fl_test1_array = np.array(y_pred_fl_test1_list)
+                # 
+                # cm_fl_test1 = confusion_matrix(y_test1, y_pred_fl_test1_array)
+                # plot_confusion_matrix(cm_fl_test1, classes=class_names_fl,
+                #                       title=f'{name} ({current_num_clients} clients) - CM (Validation - datatest.txt)',
+                #                       filename=os.path.join('results', f'cm_{name}_{current_num_clients}clients_validation.png'))
+                logger.info(f"{name} ({current_num_clients} clients) - Validation Set (datatest.txt) Final Accuracy (from history): "
+                            f"{current_run_fl_results[name].get('Accuracy_Validation', 0.0):.4f}")
+                # Log validation loss as well
+                logger.info(f"{name} ({current_num_clients} clients) - Validation Set (datatest.txt) Final Loss (from history): "
+                            f"{current_run_fl_results[name].get('Loss_Validation', float('inf')):.4f}")
 
-                # CM on Test Set 2
+                # CM on Test Set (datatest2.txt) - RETAINED
                 y_pred_fl_test2_list = []
                 with torch.no_grad():
                     test_loader2 = DataLoader(TensorDataset(torch.FloatTensor(X_test2_scaled), torch.FloatTensor(y_test2).reshape(-1,1)), batch_size=32)
@@ -512,46 +555,68 @@ def main():
 
                 cm_fl_test2 = confusion_matrix(y_test2, y_pred_fl_test2_array)
                 plot_confusion_matrix(cm_fl_test2, classes=class_names_fl,
-                                      title=f'{name} ({current_num_clients} clients) - CM (Test Set 2)',
-                                      filename=os.path.join('results', f'cm_{name}_{current_num_clients}clients_test2.png'))
-                logger.info(f"{name} ({current_num_clients} clients) - Test Set 2 Final Accuracy (from history): "
-                            f"{current_run_fl_results[name].get('Accuracy_Test2', 0.0):.4f}")
+                                      title=f'{name} ({current_num_clients} clients) - CM (Test Set - datatest2.txt)', # Back to English
+                                      filename=os.path.join('results', f'cm_{name}_{current_num_clients}clients_test_set.png')) # Standardized filename
+                logger.info(f"{name} ({current_num_clients} clients) - Test Set (datatest2.txt) Final Accuracy (from history): "
+                            f"{current_run_fl_results[name].get('Accuracy_Test', 0.0):.4f}")
             else:
                 logger.warning(f"FL CM & Metrics: Could not capture final parameters - {name} ({current_num_clients} clients).")
 
-            # --- FL Learning Curves ---
-            plt.figure(figsize=(12, 8))
-            plot_title_lc = f'Learning Curves - {name} ({current_num_clients} clients)' # Renamed to avoid conflict
-            plotted_something = False
-
-            if history.metrics_distributed and 'accuracy_test1' in history.metrics_distributed and history.metrics_distributed['accuracy_test1']:
-                rounds_test1, acc_test1_lc = zip(*history.metrics_distributed['accuracy_test1']) # Renamed to avoid conflict
-                if rounds_test1 and acc_test1_lc:
-                    plt.plot(rounds_test1, acc_test1_lc, marker='o', label='Test Set 1 Accuracy (Client Avg.)')
-                    plotted_something = True
+            # --- FL Learning Curves (Separated for Validation and Test) ---
             
-            if history.metrics_centralized and 'accuracy_test2' in history.metrics_centralized:
-                acc2_data = history.metrics_centralized.get('accuracy_test2')
-                if acc2_data:
-                    rounds_test2, acc_test2_server = zip(*acc2_data)
-                    if rounds_test2 and acc_test2_server:
-                        plt.plot(rounds_test2, acc_test2_server, marker='x', label='Test Set 2 Accuracy (Server)')
-                        plotted_something = True
+            # Plot 1: Validation Metrics (Accuracy & Loss on datatest.txt)
+            plt.figure(figsize=(10, 6))
+            plot_title_val_lc = f'Validation Metrics - {name} ({current_num_clients} clients) - datatest.txt' # English
+            plotted_val_something = False
 
-            if history.losses_centralized:
-                rounds_loss_server, loss_server = zip(*history.losses_centralized)
-                if rounds_loss_server and loss_server:
-                    plt.plot(rounds_loss_server, loss_server, marker='s', linestyle='--', label='Test Set 2 Loss (Server)')
-                    plotted_something = True
+            if history.metrics_distributed and 'accuracy_validation' in history.metrics_distributed and history.metrics_distributed['accuracy_validation']:
+                rounds_val_acc, acc_val_lc = zip(*history.metrics_distributed['accuracy_validation'])
+                if rounds_val_acc and acc_val_lc:
+                    plt.plot(rounds_val_acc, acc_val_lc, marker='o', linestyle='-', label='Validation Accuracy (Client Avg.)') # English
+                    plotted_val_something = True
             
-            if plotted_something:
-                plt.title(plot_title_lc)
-                plt.xlabel('Federated Round')
-                plt.ylabel('Accuracy / Loss')
+            if history.metrics_distributed and 'loss_validation' in history.metrics_distributed and history.metrics_distributed['loss_validation']:
+                rounds_val_loss, loss_val_lc = zip(*history.metrics_distributed['loss_validation'])
+                if rounds_val_loss and loss_val_lc:
+                    plt.plot(rounds_val_loss, loss_val_lc, marker='s', linestyle='--', label='Validation Loss (Client Avg.)') # English
+                    plotted_val_something = True
+
+            if plotted_val_something:
+                plt.title(plot_title_val_lc)
+                plt.xlabel('Federated Round') # English
+                plt.ylabel('Accuracy / Loss') # English
                 plt.legend()
                 plt.grid(True)
-                plt.savefig(os.path.join('results', f'lc_{name}_{current_num_clients}clients.png'))
-            plt.close()
+                plt.savefig(os.path.join('results', f'lc_validation_{name}_{current_num_clients}clients.png'))
+            plt.close() # Close validation plot figure
+
+            # Plot 2: Test Metrics (Accuracy & Loss on datatest2.txt)
+            plt.figure(figsize=(10, 6))
+            plot_title_test_lc = f'Test Metrics - {name} ({current_num_clients} clients) - datatest2.txt' # English
+            plotted_test_something = False
+
+            if history.metrics_centralized and 'accuracy_test' in history.metrics_centralized:
+                acc_test_data = history.metrics_centralized.get('accuracy_test')
+                if acc_test_data:
+                    rounds_test_acc, acc_test_server = zip(*acc_test_data)
+                    if rounds_test_acc and acc_test_server:
+                        plt.plot(rounds_test_acc, acc_test_server, marker='x', linestyle='-', label='Test Accuracy (Server)') # English
+                        plotted_test_something = True
+
+            if history.losses_centralized: # Server-side losses are test losses on datatest2.txt
+                rounds_test_loss_server, loss_test_server = zip(*history.losses_centralized)
+                if rounds_test_loss_server and loss_test_server:
+                    plt.plot(rounds_test_loss_server, loss_test_server, marker='p', linestyle='--', label='Test Loss (Server)') # English
+                    plotted_test_something = True
+            
+            if plotted_test_something:
+                plt.title(plot_title_test_lc)
+                plt.xlabel('Federated Round') # English
+                plt.ylabel('Accuracy / Loss') # English
+                plt.legend()
+                plt.grid(True)
+                plt.savefig(os.path.join('results', f'lc_test_{name}_{current_num_clients}clients.png'))
+            plt.close() # Close test plot figure
 
         all_fl_results_by_client_count[n_c] = current_run_fl_results
 
@@ -561,30 +626,30 @@ def main():
     table_data_for_print = []
     table_headers = [
         "Model Name", 
-        "Acc (Test1)",
-        "Acc (Test2)",
-        "Training Time (s)" # Updated header
+        "Acc (Validation)", # Updated header
+        "Acc (Test)",       # Updated header
+        "Training Time (s)"
     ]
     
-    # Classical model results
+    # Classical model results (validation on test1, test on test2)
     for name_classical, metrics_classical in classical_results.items():
         row = [name_classical]
         row.extend([
-            f"{metrics_classical.get('Accuracy_Test1', 0.0):.4f}",
-            f"{metrics_classical.get('Accuracy_Test2', 0.0):.4f}",
-            f"{metrics_classical.get('Training Time', 0.0):.2f}" # Add training time
+            f"{metrics_classical.get('Accuracy_Validation', 0.0):.4f}", # Test1 is now Validation
+            f"{metrics_classical.get('Accuracy_Test', 0.0):.4f}",       # Test2 is Test
+            f"{metrics_classical.get('Training Time', 0.0):.2f}"
         ])
         table_data_for_print.append(row)
 
     # FL model results
     for n_c_fl, fl_results_for_count_fl in all_fl_results_by_client_count.items():
         for strategy_name_fl, metrics_fl in fl_results_for_count_fl.items():
-            model_display_name_fl = f"{strategy_name_fl} ({n_c_fl} clients)" # Back to English "clients"
+            model_display_name_fl = f"{strategy_name_fl} ({n_c_fl} clients)"
             row = [model_display_name_fl]
             row.extend([
-                f"{metrics_fl.get('Accuracy_Test1', 0.0):.4f}",
-                f"{metrics_fl.get('Accuracy_Test2', 0.0):.4f}",
-                f"{metrics_fl.get('Training Time', 0.0):.2f}" # Add training time
+                f"{metrics_fl.get('Accuracy_Validation', 0.0):.4f}", # Use new key
+                f"{metrics_fl.get('Accuracy_Test', 0.0):.4f}",       # Use new key
+                f"{metrics_fl.get('Training Time', 0.0):.2f}"
             ])
             table_data_for_print.append(row)
 
@@ -620,29 +685,29 @@ def main():
 
     # --- Overall Accuracy Comparison Graph ---
     model_names_plot = []
-    accuracies_test1_plot = []
-    accuracies_test2_plot = []
+    accuracies_validation_plot = [] # Renamed for clarity
+    accuracies_test_plot = []       # Renamed for clarity
 
-    for model_name_plot, metrics_plot in classical_results.items(): # Renamed to avoid conflict
+    for model_name_plot, metrics_plot in classical_results.items():
         model_names_plot.append(model_name_plot)
-        accuracies_test1_plot.append(metrics_plot.get('Accuracy_Test1', 0.0))
-        accuracies_test2_plot.append(metrics_plot.get('Accuracy_Test2', 0.0))
+        accuracies_validation_plot.append(metrics_plot.get('Accuracy_Validation', 0.0)) # Test1 is Validation
+        accuracies_test_plot.append(metrics_plot.get('Accuracy_Test', 0.0))   # Test2 is Test
 
-    for n_c_plot, fl_results_for_count_plot in all_fl_results_by_client_count.items(): # Renamed
+    for n_c_plot, fl_results_for_count_plot in all_fl_results_by_client_count.items():
         for strategy_name_plot, metrics_plot_fl in fl_results_for_count_plot.items(): # Renamed
             model_names_plot.append(f'{strategy_name_plot} ({n_c_plot} clients)')
-            accuracies_test1_plot.append(metrics_plot_fl.get('Accuracy_Test1', 0.0))
-            accuracies_test2_plot.append(metrics_plot_fl.get('Accuracy_Test2', 0.0))
+            accuracies_validation_plot.append(metrics_plot_fl.get('Accuracy_Validation', 0.0)) # Use new key
+            accuracies_test_plot.append(metrics_plot_fl.get('Accuracy_Test', 0.0))       # Use new key
 
     x_indices = np.arange(len(model_names_plot))
     bar_width = 0.35
 
-    fig, ax = plt.subplots(figsize=(max(12, len(model_names_plot) * 0.8), 7)) # Dynamic width
-    rects1 = ax.bar(x_indices - bar_width/2, accuracies_test1_plot, bar_width, label='Test Set 1 Accuracy')
-    rects2 = ax.bar(x_indices + bar_width/2, accuracies_test2_plot, bar_width, label='Test Set 2 Accuracy')
+    fig, ax = plt.subplots(figsize=(max(12, len(model_names_plot) * 0.8), 7))
+    rects1 = ax.bar(x_indices - bar_width/2, accuracies_validation_plot, bar_width, label='Validation Accuracy (datatest.txt)')
+    rects2 = ax.bar(x_indices + bar_width/2, accuracies_test_plot, bar_width, label='Test Accuracy (datatest2.txt)')
 
     ax.set_ylabel('Accuracy')
-    ax.set_title('Accuracy Comparison of Models')
+    ax.set_title('Overall Model Accuracy Comparison') # English
     ax.set_xticks(x_indices)
     ax.set_xticklabels(model_names_plot, rotation=45, ha="right")
     ax.legend()
@@ -671,10 +736,15 @@ def fit_config(server_round: int):
 
 def aggregate_client_metrics_test1(metrics: List[Tuple[int, Metrics]]) -> Metrics:
     if not metrics: return {}
-    accuracies = [num_examples * m["accuracy"] for num_examples, m in metrics if "accuracy" in m]
-    examples = [num_examples for num_examples, m in metrics if "accuracy" in m]
+    accuracies = [num_examples * m["accuracy"] for num_examples, m in metrics if "accuracy" in m and isinstance(m, dict)]
+    losses = [num_examples * m["loss"] for num_examples, m in metrics if "loss" in m and isinstance(m, dict)] # Add loss aggregation
+    examples = [num_examples for num_examples, m in metrics if "accuracy" in m and "loss" in m and isinstance(m, dict)] # Ensure both are present
+    
     aggregated_accuracy = sum(accuracies) / sum(examples) if sum(examples) > 0 else 0.0
-    return {"accuracy_test1": aggregated_accuracy}
+    aggregated_loss = sum(losses) / sum(examples) if sum(examples) > 0 else float('inf') # Aggregate loss
+    
+    logger.info(f"Aggregated client metrics (validation on datatest.txt): Accuracy={aggregated_accuracy:.4f}, Loss={aggregated_loss:.4f}")
+    return {"accuracy_validation": aggregated_accuracy, "loss_validation": aggregated_loss} # Rename keys
 
 # Server-Side Evaluation Function and Parameter Capture
 def get_evaluate_fn_test2_and_param_capture(model_nn: torch.nn.Module, test_data: torch.Tensor, test_labels: torch.Tensor, device: torch.device, strategy_name_for_log: str, client_count_for_log: int):
@@ -693,11 +763,11 @@ def get_evaluate_fn_test2_and_param_capture(model_nn: torch.nn.Module, test_data
                 current_params_for_storage = parameters # Store only if Parameters type
             else:
                 logger.error(f"evaluate_fn_test2 ({strategy_name_for_log}, {client_count_for_log} clients) received unknown parameter type: {type(parameters)} round: {server_round}")
-                return float('inf'), {"accuracy_test2": 0.0, "server_eval_error": "unknown_param_type"}
+                return float('inf'), {"accuracy_test": 0.0, "server_eval_error": "unknown_param_type"}
 
             if ndarrays is None or not all(isinstance(arr, np.ndarray) for arr in ndarrays):
                 logger.error(f"evaluate_fn_test2 ({strategy_name_for_log}, {client_count_for_log} clients): ndarrays is not a list of np.ndarray or is None. Type: {type(ndarrays)} round: {server_round}")
-                return float('inf'), {"accuracy_test2": 0.0, "server_eval_error": "invalid_ndarrays"}
+                return float('inf'), {"accuracy_test": 0.0, "server_eval_error": "invalid_ndarrays"}
             
             # Before loading parameters, check model state dict keys and number of ndarrays
             model_state_dict_keys = list(model_nn.state_dict().keys())
@@ -705,7 +775,7 @@ def get_evaluate_fn_test2_and_param_capture(model_nn: torch.nn.Module, test_data
                 logger.error(
                     f"evaluate_fn_test2 ({strategy_name_for_log}, {client_count_for_log} clients) - Layer count mismatch: parameters ({len(ndarrays)}) vs model ({len(model_state_dict_keys)}) round: {server_round}"
                 )
-                return float('inf'), {"accuracy_test2": 0.0, "server_eval_error": "layer_mismatch"}
+                return float('inf'), {"accuracy_test": 0.0, "server_eval_error": "layer_mismatch"}
 
             params_dict = zip(model_state_dict_keys, ndarrays)
             state_dict = {k: torch.tensor(v) for k, v in params_dict}
@@ -734,15 +804,15 @@ def get_evaluate_fn_test2_and_param_capture(model_nn: torch.nn.Module, test_data
             
             if batches_processed == 0 or total == 0:
                 logger.warning(f"Server Evaluation ({strategy_name_for_log}, {client_count_for_log} clients, Test Set 2) - Round {server_round}: No batches processed or total samples zero.")
-                return float('inf'), {"accuracy_test2": 0.0, "server_eval_error": "no_samples_evaluated_server"}
+                return float('inf'), {"accuracy_test": 0.0, "server_eval_error": "no_samples_evaluated_server"}
 
             avg_loss = loss / total
             accuracy = correct / total
             logger.info(f"Server Evaluation ({strategy_name_for_log}, {client_count_for_log} clients, Test Set 2) - Round {server_round}: Accuracy={accuracy:.4f}, Loss={avg_loss:.4f}")
-            return avg_loss, {"accuracy_test2": accuracy}
+            return avg_loss, {"accuracy_test": accuracy} # Rename key
         except Exception as e:
             logger.error(f"SERVER EVALUATE FN ERROR ({strategy_name_for_log}, {client_count_for_log} clients) - Round {server_round}: {e}", exc_info=True)
-            return float('inf'), {"accuracy_test2": 0.0, "server_eval_error": str(e)}
+            return float('inf'), {"accuracy_test": 0.0, "server_eval_error": str(e)} # Rename key
     return evaluate, lambda: last_params_store["params"]
 
 if __name__ == "__main__":
