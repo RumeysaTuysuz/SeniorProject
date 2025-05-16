@@ -728,7 +728,257 @@ def main():
     plt.savefig(os.path.join('results', 'overall_accuracy_comparison.png'))
     plt.close()
 
+    # --- Plot Decision Tree Complexity Curve ---
+    plot_decision_tree_complexity_curve(X_train_scaled, y_train, X_test1_scaled, y_test1, 'results')
+
+    # --- Plot KNN Complexity Curve ---
+    plot_knn_complexity_curve(X_train_scaled, y_train, X_test1_scaled, y_test1, 'results')
+
+    # --- Plot Random Forest Complexity Curve (max_depth) ---
+    plot_random_forest_complexity_curve(X_train_scaled, y_train, X_test1_scaled, y_test1, 'results')
+
+    # --- Plot XGBoost Complexity Curve (max_depth) ---
+    plot_xgboost_complexity_curve(X_train_scaled, y_train, X_test1_scaled, y_test1, 'results')
+
+    # --- Plot SVM Complexity Curve (C parameter) ---
+    plot_svm_complexity_curve(X_train_scaled, y_train, X_test1_scaled, y_test1, 'results')
+
+    # --- Plot Perceptron Complexity Curve (max_iter) ---
+    plot_perceptron_complexity_curve(X_train_scaled, y_train, X_test1_scaled, y_test1, 'results')
+
     logger.info("All graphs and confusion matrices saved to 'results' directory.")
+
+# --- Model Complexity Plotting Function ---
+def plot_decision_tree_complexity_curve(X_train, y_train, X_val, y_val, results_dir):
+    logger.info("Plotting Decision Tree complexity curve (max_depth vs accuracy)...")
+    max_depths = np.arange(1, 21) # Test depths from 1 to 20
+    train_accuracies = []
+    val_accuracies = []
+
+    for depth in max_depths:
+        dt_model = DecisionTreeClassifier(max_depth=depth, random_state=42)
+        dt_model.fit(X_train, y_train)
+        
+        train_pred = dt_model.predict(X_train)
+        train_acc = accuracy_score(y_train, train_pred)
+        train_accuracies.append(train_acc)
+        
+        val_pred = dt_model.predict(X_val)
+        val_acc = accuracy_score(y_val, val_pred)
+        val_accuracies.append(val_acc)
+        logger.debug(f"  Max Depth: {depth}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(max_depths, train_accuracies, marker='o', label='Training Accuracy')
+    plt.plot(max_depths, val_accuracies, marker='s', label='Validation Accuracy')
+    plt.title('Decision Tree: Model Complexity (max_depth) vs. Accuracy')
+    plt.xlabel('Max Depth of Decision Tree')
+    plt.ylabel('Accuracy')
+    plt.xticks(max_depths)
+    plt.legend()
+    plt.grid(True)
+    plot_filename = os.path.join(results_dir, 'complexity_curve_decision_tree.png')
+    plt.savefig(plot_filename)
+    plt.close()
+    logger.info(f"Decision Tree complexity curve saved to {plot_filename}")
+
+# --- KNN Complexity Curve ---
+def plot_knn_complexity_curve(X_train, y_train, X_val, y_val, results_dir):
+    logger.info("Plotting KNN complexity curve (n_neighbors vs accuracy)...")
+    # For n_neighbors, odd numbers are often preferred to avoid ties, especially for binary classification.
+    # We will test a range of neighbor values.
+    n_neighbors_range = np.arange(1, 32, 2) # e.g., 1, 3, 5, ..., 31
+    train_accuracies = []
+    val_accuracies = []
+
+    for n in n_neighbors_range:
+        knn_model = KNeighborsClassifier(n_neighbors=n)
+        knn_model.fit(X_train, y_train)
+        
+        train_pred = knn_model.predict(X_train)
+        train_acc = accuracy_score(y_train, train_pred)
+        train_accuracies.append(train_acc)
+        
+        val_pred = knn_model.predict(X_val)
+        val_acc = accuracy_score(y_val, val_pred)
+        val_accuracies.append(val_acc)
+        logger.debug(f"  N Neighbors: {n}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(n_neighbors_range, train_accuracies, marker='o', label='Training Accuracy')
+    plt.plot(n_neighbors_range, val_accuracies, marker='s', label='Validation Accuracy')
+    plt.title('KNN: Model Complexity (n_neighbors) vs. Accuracy')
+    plt.xlabel('Number of Neighbors (n_neighbors)')
+    plt.ylabel('Accuracy')
+    plt.xticks(n_neighbors_range)
+    plt.legend()
+    plt.grid(True)
+    plot_filename = os.path.join(results_dir, 'complexity_curve_knn.png')
+    plt.savefig(plot_filename)
+    plt.close()
+    logger.info(f"KNN complexity curve saved to {plot_filename}")
+
+# --- Random Forest Complexity Curve ---
+def plot_random_forest_complexity_curve(X_train, y_train, X_val, y_val, results_dir):
+    logger.info("Plotting Random Forest complexity curve (max_depth vs accuracy)...")
+    max_depths = np.arange(1, 21) # Test depths from 1 to 20
+    train_accuracies = []
+    val_accuracies = []
+
+    # Use a fixed n_estimators for this complexity curve, e.g., the one used in main evaluation or a reasonable default.
+    # The n_estimators from the main function was 10.
+    fixed_n_estimators = 10 
+
+    for depth in max_depths:
+        # Using n_estimators=10 as in the main evaluation for consistency
+        rf_model = RandomForestClassifier(max_depth=depth, n_estimators=fixed_n_estimators, random_state=42)
+        rf_model.fit(X_train, y_train)
+        
+        train_pred = rf_model.predict(X_train)
+        train_acc = accuracy_score(y_train, train_pred)
+        train_accuracies.append(train_acc)
+        
+        val_pred = rf_model.predict(X_val)
+        val_acc = accuracy_score(y_val, val_pred)
+        val_accuracies.append(val_acc)
+        logger.debug(f"  RF Max Depth: {depth}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(max_depths, train_accuracies, marker='o', label='Training Accuracy')
+    plt.plot(max_depths, val_accuracies, marker='s', label='Validation Accuracy')
+    plt.title(f'Random Forest: Complexity (max_depth) vs. Accuracy (n_estimators={fixed_n_estimators})')
+    plt.xlabel('Max Depth of Trees')
+    plt.ylabel('Accuracy')
+    plt.xticks(max_depths)
+    plt.legend()
+    plt.grid(True)
+    plot_filename = os.path.join(results_dir, 'complexity_curve_random_forest_max_depth.png')
+    plt.savefig(plot_filename)
+    plt.close()
+    logger.info(f"Random Forest (max_depth) complexity curve saved to {plot_filename}")
+
+# --- XGBoost Complexity Curve ---
+def plot_xgboost_complexity_curve(X_train, y_train, X_val, y_val, results_dir):
+    logger.info("Plotting XGBoost complexity curve (max_depth vs accuracy)...")
+    max_depths = np.arange(1, 11) # XGBoost can be sensitive to deeper trees, testing 1 to 10.
+    train_accuracies = []
+    val_accuracies = []
+
+    # Use fixed other parameters (like n_estimators, learning_rate) from main evaluation or reasonable defaults.
+    # Main evaluation used: n_estimators=10, learning_rate=0.3
+    fixed_n_estimators = 10
+    fixed_learning_rate = 0.3
+
+    for depth in max_depths:
+        xgb_model = XGBClassifier(max_depth=depth, 
+                                  n_estimators=fixed_n_estimators, 
+                                  learning_rate=fixed_learning_rate, 
+                                  random_state=42, 
+                                  use_label_encoder=False, # Deprecation warning önlemek için
+                                  eval_metric='logloss') # Uyarıyı önlemek için
+        xgb_model.fit(X_train, y_train)
+        
+        train_pred = xgb_model.predict(X_train)
+        train_acc = accuracy_score(y_train, train_pred)
+        train_accuracies.append(train_acc)
+        
+        val_pred = xgb_model.predict(X_val)
+        val_acc = accuracy_score(y_val, val_pred)
+        val_accuracies.append(val_acc)
+        logger.debug(f"  XGB Max Depth: {depth}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(max_depths, train_accuracies, marker='o', label='Training Accuracy')
+    plt.plot(max_depths, val_accuracies, marker='s', label='Validation Accuracy')
+    plt.title(f'XGBoost: Complexity (max_depth) vs. Accuracy (n_est={fixed_n_estimators}, lr={fixed_learning_rate})')
+    plt.xlabel('Max Depth of Trees')
+    plt.ylabel('Accuracy')
+    plt.xticks(max_depths)
+    plt.legend()
+    plt.grid(True)
+    plot_filename = os.path.join(results_dir, 'complexity_curve_xgboost_max_depth.png')
+    plt.savefig(plot_filename)
+    plt.close()
+    logger.info(f"XGBoost (max_depth) complexity curve saved to {plot_filename}")
+
+# --- SVM Complexity Curve ---
+def plot_svm_complexity_curve(X_train, y_train, X_val, y_val, results_dir):
+    logger.info("Plotting SVM complexity curve (C parameter vs accuracy)...")
+    # C values typically vary over a logarithmic scale
+    C_values = [0.001, 0.01, 0.1, 1, 10, 100, 1000]
+    train_accuracies = []
+    val_accuracies = []
+
+    # Kernel and other parameters from main evaluation (kernel='rbf', probability=True)
+    # We will use the default kernel 'rbf' and other params from main.
+
+    for c_param in C_values:
+        svm_model = SVC(C=c_param, kernel='rbf', random_state=42, probability=True) # probability=True for consistency if needed elsewhere, though not for acc.
+        svm_model.fit(X_train, y_train)
+        
+        train_pred = svm_model.predict(X_train)
+        train_acc = accuracy_score(y_train, train_pred)
+        train_accuracies.append(train_acc)
+        
+        val_pred = svm_model.predict(X_val)
+        val_acc = accuracy_score(y_val, val_pred)
+        val_accuracies.append(val_acc)
+        logger.debug(f"  SVM C: {c_param}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(C_values, train_accuracies, marker='o', label='Training Accuracy')
+    plt.plot(C_values, val_accuracies, marker='s', label='Validation Accuracy')
+    plt.xscale('log') # Use a logarithmic scale for C
+    plt.title('SVM: Model Complexity (C parameter) vs. Accuracy (kernel=rbf)')
+    plt.xlabel('C Parameter (Regularization Strength)')
+    plt.ylabel('Accuracy')
+    plt.xticks(C_values, labels=[str(c) for c in C_values]) # Ensure C values are shown on x-axis
+    plt.legend()
+    plt.grid(True)
+    plot_filename = os.path.join(results_dir, 'complexity_curve_svm_C.png')
+    plt.savefig(plot_filename)
+    plt.close()
+    logger.info(f"SVM (C parameter) complexity curve saved to {plot_filename}")
+
+# --- Perceptron Complexity Curve ---
+def plot_perceptron_complexity_curve(X_train, y_train, X_val, y_val, results_dir):
+    logger.info("Plotting Perceptron complexity curve (max_iter vs accuracy)...")
+    # Test a range of max_iter values
+    # Perceptron can converge quickly or take more iterations depending on data and learning rate (eta0)
+    # Main evaluation used max_iter=50, eta0=0.5
+    max_iter_values = [1, 5, 10, 20, 30, 40, 50, 75, 100, 150, 200]
+    train_accuracies = []
+    val_accuracies = []
+    
+    fixed_eta0 = 0.5 # From main evaluation
+
+    for n_iter in max_iter_values:
+        perceptron_model = Perceptron(max_iter=n_iter, eta0=fixed_eta0, random_state=42, tol=1e-3) # tol is default but good to be aware of
+        perceptron_model.fit(X_train, y_train)
+        
+        train_pred = perceptron_model.predict(X_train)
+        train_acc = accuracy_score(y_train, train_pred)
+        train_accuracies.append(train_acc)
+        
+        val_pred = perceptron_model.predict(X_val)
+        val_acc = accuracy_score(y_val, val_pred)
+        val_accuracies.append(val_acc)
+        logger.debug(f"  Perceptron Max Iter: {n_iter}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(max_iter_values, train_accuracies, marker='o', label='Training Accuracy')
+    plt.plot(max_iter_values, val_accuracies, marker='s', label='Validation Accuracy')
+    plt.title(f'Perceptron: Model Convergence (max_iter) vs. Accuracy (eta0={fixed_eta0})')
+    plt.xlabel('Max Iterations (max_iter)')
+    plt.ylabel('Accuracy')
+    plt.xticks(max_iter_values, rotation=45, ha="right")
+    plt.legend()
+    plt.grid(True)
+    plot_filename = os.path.join(results_dir, 'complexity_curve_perceptron_max_iter.png')
+    plt.savefig(plot_filename)
+    plt.tight_layout() # Adjust layout to prevent labels from overlapping
+    plt.close()
+    logger.info(f"Perceptron (max_iter) complexity curve saved to {plot_filename}")
 
 # fit_config, aggregate_client_metrics_test1 and get_evaluate_fn_test2 functions should remain in global scope.
 def fit_config(server_round: int):
