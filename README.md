@@ -54,3 +54,7 @@ The data is sourced from three files:
         *   SVM: `C` parameter vs. Accuracy
         *   Perceptron: `max_iter` vs. Accuracy
         (Saved in the `results` directory, e.g., `complexity_curve_decision_tree.png`).
+
+
+![image](https://github.com/user-attachments/assets/123c100d-d9c2-4774-91e5-c1b89c59be80)
+
