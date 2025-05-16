@@ -39,3 +39,4 @@ Program çalıştırıldığında:
 4. Tüm modellerin karşılaştırmalı sonuçları
 
 terminal üzerinde gösterilecektir. 
+![image](https://github.com/user-attachments/assets/5245b662-807b-4e2c-a034-6e616ea14df1)
